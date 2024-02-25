@@ -12,6 +12,6 @@ RUN go mod download && go mod verify
 COPY . .
 RUN make build
 
-FROM gcr.io/distroless/base-debian12@sha256:f47fa3dbb9c1b1a5d968106c98380c40f28c721f0f8e598e8d760169ae2db836
+FROM gcr.io/distroless/base-debian12@sha256:5eae9ef0b97acf7de819f936e12b24976b2d54333a2cf329615366e16ba598cd
 COPY --from=builder /app/otel-go-instrumentation /
 CMD ["/otel-go-instrumentation"]
