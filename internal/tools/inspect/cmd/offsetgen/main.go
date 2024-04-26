@@ -70,6 +70,11 @@ func manifests() ([]inspect.Manifest, error) {
 		return nil, fmt.Errorf("failed to get Go versions: %w", err)
 	}
 
+	goVers22, err := GoVersions(">= 1.22.0")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Go versions >= 1.22.0: %w", err)
+	}
+
 	grpcVers, err := PkgVersions("google.golang.org/grpc")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get \"google.golang.org/grpc\" versions: %w", err)
@@ -122,11 +127,21 @@ func manifests() ([]inspect.Manifest, error) {
 				structfield.NewID("std", "net/http", "Request", "Proto"),
 				structfield.NewID("std", "net/http", "Request", "RequestURI"),
 				structfield.NewID("std", "net/http", "Request", "Host"),
-				structfield.NewID("std", "net/http", "Request", "pat"),
-				structfield.NewID("std", "net/http", "pattern", "str"),
 				structfield.NewID("std", "net/url", "URL", "Path"),
 				structfield.NewID("std", "bufio", "Writer", "buf"),
 				structfield.NewID("std", "bufio", "Writer", "n"),
+			},
+		},
+		{
+			// These symbols were added in 1.22.0. Do not waste time/space
+			// doing lookups for all versions of Go < 1.22.
+			Application: inspect.Application{
+				Renderer:  ren("templates/net/http/*.tmpl"),
+				GoVerions: goVers22,
+			},
+			StructFields: []structfield.ID{
+				structfield.NewID("std", "net/http", "Request", "pat"),
+				structfield.NewID("std", "net/http", "pattern", "str"),
 			},
 		},
 		{
