@@ -107,7 +107,7 @@ docker-build-base:
 OFFSETS_OUTPUT_FILE="$(REPODIR)/internal/pkg/inject/offset_results.json"
 .PHONY: offsets
 offsets: | $(OFFSETGEN)
-	$(OFFSETGEN) -output=$(OFFSETS_OUTPUT_FILE) -cache=$(OFFSETS_OUTPUT_FILE)
+	$(OFFSETGEN) -output=$(OFFSETS_OUTPUT_FILE) -cache=$(OFFSETS_OUTPUT_FILE) -v=20
 
 .PHONY: docker-offsets
 docker-offsets:
