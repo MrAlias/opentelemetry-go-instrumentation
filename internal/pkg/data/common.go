@@ -72,17 +72,15 @@ func (m *AnyValue) UnmarshalJSON(data []byte) error {
 			m.Value = &AnyValue_BytesValue{
 				BytesValue: decoded,
 			}
-		/*
-			 TODO:
-						case "arrayValue", "array_value":
-							m.Value = &AnyValue_ArrayValue{
-								ArrayValue: readArray(iter),
-							}
-						case "kvlistValue", "kvlist_value":
-							m.Value = &AnyValue_KvlistValue{
-								KvlistValue: readKvlistValue(iter),
-							}
-		*/
+		// TODO:
+		// case "arrayValue", "array_value":
+		//	m.Value = &AnyValue_ArrayValue{
+		//		ArrayValue: readArray(iter),
+		//	}
+		// case "kvlistValue", "kvlist_value":
+		//	m.Value = &AnyValue_KvlistValue{
+		//		KvlistValue: readKvlistValue(iter),
+		//	}
 		default:
 			return fmt.Errorf("unsupported value type: %T", val)
 		}

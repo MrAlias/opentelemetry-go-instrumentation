@@ -5,7 +5,6 @@ package data
 
 import (
 	"bytes"
-	"encoding/gob"
 	"encoding/json"
 	"testing"
 	"time"
@@ -16,9 +15,29 @@ var (
 
 	spanID1 = [8]byte{0x1}
 	spanID2 = [8]byte{0x2}
+	spanID3 = [8]byte{0x3}
 
 	now      = time.Now()
 	nowPlus1 = now.Add(1 * time.Second)
+
+	attrA = []*KeyValue{
+		{
+			Key: "user",
+			Value: &AnyValue{
+				Value: &AnyValue_StringValue{
+					StringValue: "Alice",
+				},
+			},
+		},
+		{
+			Key: "admin",
+			Value: &AnyValue{
+				Value: &AnyValue_BoolValue{
+					BoolValue: true,
+				},
+			},
+		},
+	}
 
 	spanA = &Span{
 		TraceId:           traceID,
@@ -28,6 +47,7 @@ var (
 		Name:              "span-a",
 		StartTimeUnixNano: uint64(now.UnixNano()),
 		EndTimeUnixNano:   uint64(nowPlus1.UnixNano()),
+		Attributes:        attrA,
 		Status: &Status{
 			Message: "test status",
 			Code:    Status_STATUS_CODE_OK,
@@ -45,34 +65,6 @@ var (
 		Spans:     []*Span{spanA, spanB},
 	}
 )
-
-func BenchmarkGOBMarshalUnmarshal(b *testing.B) {
-	// TODO:
-	gob.Register(AnyValue_StringValue{})
-	gob.Register(AnyValue_BoolValue{})
-
-	var out ScopeSpans
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
-		var inBuf bytes.Buffer
-		enc := gob.NewEncoder(&inBuf)
-		err := enc.Encode(scopeSpans)
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		payload := inBuf.Bytes()
-
-		dec := gob.NewDecoder(bytes.NewReader(payload))
-		err = dec.Decode(&out)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-	_ = out
-}
 
 func BenchmarkJSONMarshalUnmarshal(b *testing.B) {
 	var out ScopeSpans
