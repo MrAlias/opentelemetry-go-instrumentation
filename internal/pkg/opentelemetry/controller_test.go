@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
@@ -26,7 +28,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 
-	"go.opentelemetry.io/auto/internal/pkg/instrumentation/probe"
+	"go.opentelemetry.io/auto/internal/pkg/instrumentation/utils"
 )
 
 // copied from instrumentation.go.
@@ -57,8 +59,8 @@ func instResource() *resource.Resource {
 }
 
 func TestTrace(t *testing.T) {
-	startTime := time.Now()
-	endTime := startTime.Add(1 * time.Second)
+	startTime := time.Unix(0, 0).UTC()
+	endTime := time.Unix(1, 0).UTC()
 
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(
@@ -78,34 +80,34 @@ func TestTrace(t *testing.T) {
 	assert.NoError(t, err)
 	trId, err := trace.TraceIDFromHex("00f067aa0ba902b700f067aa0ba902b7")
 	assert.NoError(t, err)
-	spanContext := trace.NewSpanContext(
-		trace.SpanContextConfig{
-			SpanID:     spId,
-			TraceID:    trId,
-			TraceFlags: 1,
-		},
-	)
 
 	testCases := []struct {
 		name     string
-		event    *probe.Event
+		traces   ptrace.Traces
 		expected tracetest.SpanStubs
 	}{
 		{
 			name: "basic test span",
-			event: &probe.Event{
-				Package: "foo/bar",
-				Kind:    trace.SpanKindClient,
-				SpanEvents: []*probe.SpanEvent{
-					{
-						SpanName:     "testSpan",
-						StartTime:    startTime,
-						EndTime:      endTime,
-						SpanContext:  &spanContext,
-						TracerSchema: semconv.SchemaURL,
-					},
-				},
-			},
+			traces: func() ptrace.Traces {
+				t := ptrace.NewTraces()
+				ss := t.ResourceSpans().AppendEmpty().ScopeSpans().AppendEmpty()
+				ss.SetSchemaUrl(semconv.SchemaURL)
+
+				scope := ss.Scope()
+				scope.SetName("go.opentelemetry.io/auto/foo/bar")
+				scope.SetVersion("test")
+
+				span := ss.Spans().AppendEmpty()
+				span.SetName("testSpan")
+				span.SetTraceID(pcommon.TraceID(trId))
+				span.SetSpanID(pcommon.SpanID(spId))
+				span.SetFlags(1)
+				span.SetKind(ptrace.SpanKindClient)
+				span.SetStartTimestamp(pcommon.NewTimestampFromTime(startTime))
+				span.SetEndTimestamp(pcommon.NewTimestampFromTime(endTime))
+
+				return t
+			}(),
 			expected: tracetest.SpanStubs{
 				{
 					Name:      "testSpan",
@@ -128,25 +130,34 @@ func TestTrace(t *testing.T) {
 		},
 		{
 			name: "http/client",
-			event: &probe.Event{
-				Package: "net/http",
-				Kind:    trace.SpanKindClient,
-				SpanEvents: []*probe.SpanEvent{
-					{
-						SpanName:    "GET",
-						StartTime:   startTime,
-						EndTime:     endTime,
-						SpanContext: &spanContext,
-						Attributes: []attribute.KeyValue{
-							semconv.HTTPRequestMethodKey.String("GET"),
-							semconv.URLPath("/"),
-							semconv.HTTPResponseStatusCodeKey.Int(200),
-							semconv.ServerAddress("https://google.com"),
-							semconv.ServerPort(8080),
-						},
-					},
-				},
-			},
+			traces: func() ptrace.Traces {
+				t := ptrace.NewTraces()
+				ss := t.ResourceSpans().AppendEmpty().ScopeSpans().AppendEmpty()
+
+				scope := ss.Scope()
+				scope.SetName("go.opentelemetry.io/auto/net/http")
+				scope.SetVersion("test")
+
+				span := ss.Spans().AppendEmpty()
+				span.SetName("GET")
+				span.SetTraceID(pcommon.TraceID(trId))
+				span.SetSpanID(pcommon.SpanID(spId))
+				span.SetFlags(1)
+				span.SetKind(ptrace.SpanKindClient)
+				span.SetStartTimestamp(pcommon.NewTimestampFromTime(startTime))
+				span.SetEndTimestamp(pcommon.NewTimestampFromTime(endTime))
+
+				utils.Attributes(
+					span.Attributes(),
+					semconv.HTTPRequestMethodKey.String("GET"),
+					semconv.URLPath("/"),
+					semconv.HTTPResponseStatusCodeKey.Int(200),
+					semconv.ServerAddress("https://google.com"),
+					semconv.ServerPort(8080),
+				)
+
+				return t
+			}(),
 			expected: tracetest.SpanStubs{
 				{
 					Name:      "GET",
@@ -174,26 +185,35 @@ func TestTrace(t *testing.T) {
 		},
 		{
 			name: "http/client with status code",
-			event: &probe.Event{
-				Package: "net/http",
-				Kind:    trace.SpanKindClient,
-				SpanEvents: []*probe.SpanEvent{
-					{
-						SpanName:    "GET",
-						StartTime:   startTime,
-						EndTime:     endTime,
-						SpanContext: &spanContext,
-						Attributes: []attribute.KeyValue{
-							semconv.HTTPRequestMethodKey.String("GET"),
-							semconv.URLPath("/"),
-							semconv.HTTPResponseStatusCodeKey.Int(500),
-							semconv.ServerAddress("https://google.com"),
-							semconv.ServerPort(8080),
-						},
-						Status: probe.Status{Code: codes.Error},
-					},
-				},
-			},
+			traces: func() ptrace.Traces {
+				t := ptrace.NewTraces()
+				ss := t.ResourceSpans().AppendEmpty().ScopeSpans().AppendEmpty()
+
+				scope := ss.Scope()
+				scope.SetName("go.opentelemetry.io/auto/net/http")
+				scope.SetVersion("test")
+
+				span := ss.Spans().AppendEmpty()
+				span.SetName("GET")
+				span.SetTraceID(pcommon.TraceID(trId))
+				span.SetSpanID(pcommon.SpanID(spId))
+				span.SetFlags(1)
+				span.SetKind(ptrace.SpanKindClient)
+				span.SetStartTimestamp(pcommon.NewTimestampFromTime(startTime))
+				span.SetEndTimestamp(pcommon.NewTimestampFromTime(endTime))
+				span.Status().SetCode(ptrace.StatusCodeError)
+
+				utils.Attributes(
+					span.Attributes(),
+					semconv.HTTPRequestMethodKey.String("GET"),
+					semconv.URLPath("/"),
+					semconv.HTTPResponseStatusCodeKey.Int(500),
+					semconv.ServerAddress("https://google.com"),
+					semconv.ServerPort(8080),
+				)
+
+				return t
+			}(),
 			expected: tracetest.SpanStubs{
 				{
 					Name:      "GET",
@@ -222,27 +242,36 @@ func TestTrace(t *testing.T) {
 		},
 		{
 			name: "otelglobal",
-			event: &probe.Event{
-				Kind: trace.SpanKindClient,
-				SpanEvents: []*probe.SpanEvent{
-					{
-						SpanName:    "very important span",
-						StartTime:   startTime,
-						EndTime:     endTime,
-						SpanContext: &spanContext,
-						Attributes: []attribute.KeyValue{
-							attribute.Int64("int.value", 42),
-							attribute.String("string.value", "hello"),
-							attribute.Float64("float.value", 3.14),
-							attribute.Bool("bool.value", true),
-						},
-						Status:        probe.Status{Code: codes.Error, Description: "error description"},
-						TracerName:    "user-tracer",
-						TracerVersion: "v1",
-						TracerSchema:  "user-schema",
-					},
-				},
-			},
+			traces: func() ptrace.Traces {
+				t := ptrace.NewTraces()
+				ss := t.ResourceSpans().AppendEmpty().ScopeSpans().AppendEmpty()
+				ss.SetSchemaUrl("user-schema")
+
+				scope := ss.Scope()
+				scope.SetName("user-tracer")
+				scope.SetVersion("v1")
+
+				span := ss.Spans().AppendEmpty()
+				span.SetName("very important span")
+				span.SetTraceID(pcommon.TraceID(trId))
+				span.SetSpanID(pcommon.SpanID(spId))
+				span.SetFlags(1)
+				span.SetKind(ptrace.SpanKindClient)
+				span.SetStartTimestamp(pcommon.NewTimestampFromTime(startTime))
+				span.SetEndTimestamp(pcommon.NewTimestampFromTime(endTime))
+				span.Status().SetCode(ptrace.StatusCodeError)
+				span.Status().SetMessage("error description")
+
+				utils.Attributes(
+					span.Attributes(),
+					attribute.Int64("int.value", 42),
+					attribute.String("string.value", "hello"),
+					attribute.Float64("float.value", 3.14),
+					attribute.Bool("bool.value", true),
+				)
+
+				return t
+			}(),
 			expected: tracetest.SpanStubs{
 				{
 					Name:      "very important span",
@@ -275,7 +304,7 @@ func TestTrace(t *testing.T) {
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
 			defer exporter.Reset()
-			ctrl.Trace(tt.event)
+			ctrl.Trace(tt.traces)
 			tp.ForceFlush(context.Background())
 			spans := exporter.GetSpans()
 			assert.Equal(t, len(tt.expected), len(spans))
@@ -304,17 +333,16 @@ func TestGetTracer(t *testing.T) {
 	ctrl, err := NewController(slog.Default(), tp, "test")
 	assert.NoError(t, err)
 
-	t1 := ctrl.getTracer("foo/bar", "test", "v1", "schema")
+	t1 := ctrl.getTracer("test", "v1", "schema")
 	assert.Equal(t, t1, ctrl.tracersMap[tracerID{name: "test", version: "v1", schema: "schema"}])
-	assert.Nil(t, ctrl.tracersMap[tracerID{name: "foo/bar", version: "v1", schema: "schema"}])
 
-	t2 := ctrl.getTracer("net/http", "", "", "")
-	assert.Equal(t, t2, ctrl.tracersMap[tracerID{name: "net/http", version: ctrl.version, schema: ""}])
+	t2 := ctrl.getTracer("net/http", "", "")
+	assert.Equal(t, t2, ctrl.tracersMap[tracerID{name: "net/http", version: "", schema: ""}])
 
-	t3 := ctrl.getTracer("foo/bar", "test", "v1", "schema")
+	t3 := ctrl.getTracer("test", "v1", "schema")
 	assert.Same(t, t1, t3)
 
-	t4 := ctrl.getTracer("net/http", "", "", "")
+	t4 := ctrl.getTracer("net/http", "", "")
 	assert.Same(t, t2, t4)
 	assert.Equal(t, len(ctrl.tracersMap), 2)
 }
