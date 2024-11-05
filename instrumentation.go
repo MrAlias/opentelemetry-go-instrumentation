@@ -5,26 +5,16 @@ package auto
 
 import (
 	"context"
-	"debug/buildinfo"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 
-	"go.opentelemetry.io/contrib/exporters/autoexport"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/sdk/resource"
-	"go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
-
+	"go.opentelemetry.io/auto/handler"
+	"go.opentelemetry.io/auto/handler/otelsdk"
 	"go.opentelemetry.io/auto/internal/pkg/instrumentation"
-	"go.opentelemetry.io/auto/internal/pkg/opentelemetry"
 	"go.opentelemetry.io/auto/internal/pkg/process"
 )
 
@@ -32,14 +22,6 @@ const (
 	// envTargetExeKey is the key for the environment variable value pointing to the
 	// target binary to instrument.
 	envTargetExeKey = "OTEL_GO_AUTO_TARGET_EXE"
-	// envServiceName is the key for the envoriment variable value containing the service name.
-	envServiceNameKey = "OTEL_SERVICE_NAME"
-	// envResourceAttrKey is the key for the environment variable value containing
-	// OpenTelemetry Resource attributes.
-	envResourceAttrKey = "OTEL_RESOURCE_ATTRIBUTES"
-	// envTracesExportersKey is the key for the environment variable value
-	// containing what OpenTelemetry trace exporter to use.
-	envTracesExportersKey = "OTEL_TRACES_EXPORTER"
 	// envOtelGlobalImplKey is the key for the environment variable value enabling to opt-in for the
 	// OpenTelemetry global implementation. It should be a boolean value.
 	envOtelGlobalImplKey = "OTEL_GO_AUTO_GLOBAL"
@@ -88,13 +70,8 @@ func NewInstrumentation(ctx context.Context, opts ...InstrumentationOption) (*In
 		return nil, err
 	}
 
-	ctrl, err := opentelemetry.NewController(c.logger, c.tracerProvider(pa.BuildInfo))
-	if err != nil {
-		return nil, err
-	}
-
 	cp := convertConfigProvider(c.cp)
-	mngr, err := instrumentation.NewManager(c.logger, ctrl, c.globalImpl, c.loadIndicator, cp, Version())
+	mngr, err := instrumentation.NewManager(c.logger, c.traceHandler, c.globalImpl, c.loadIndicator, cp, Version())
 	if err != nil {
 		return nil, err
 	}
@@ -177,15 +154,13 @@ type InstrumentationOption interface {
 }
 
 type instConfig struct {
-	traceExp           trace.SpanExporter
-	target             process.TargetArgs
-	serviceName        string
-	additionalResAttrs []attribute.KeyValue
-	globalImpl         bool
-	loadIndicator      chan struct{}
-	logger             *slog.Logger
-	sampler            Sampler
-	cp                 ConfigProvider
+	traceHandler  handler.Tracer
+	target        process.TargetArgs
+	globalImpl    bool
+	loadIndicator chan struct{}
+	logger        *slog.Logger
+	sampler       Sampler
+	cp            ConfigProvider
 }
 
 func newInstConfig(ctx context.Context, opts []InstrumentationOption) (instConfig, error) {
@@ -201,14 +176,9 @@ func newInstConfig(ctx context.Context, opts []InstrumentationOption) (instConfi
 		}
 	}
 
-	// Defaults.
-	if c.serviceName == "" {
-		c.serviceName = c.defaultServiceName()
-	}
-	if c.traceExp == nil {
+	if c.traceHandler == nil {
 		var e error
-		// This is the OTel recommended default.
-		c.traceExp, e = otlptracehttp.New(ctx)
+		c.traceHandler, e = otelsdk.NewHandler(ctx, otelsdk.WithEnv())
 		err = errors.Join(err, e)
 	}
 
@@ -227,75 +197,18 @@ func newInstConfig(ctx context.Context, opts []InstrumentationOption) (instConfi
 	return c, err
 }
 
-func (c instConfig) defaultServiceName() string {
-	name := "unknown_service"
-	if c.target.ExePath != "" {
-		name = fmt.Sprintf("%s:%s", name, filepath.Base(c.target.ExePath))
-	}
-	return name
-}
-
+// validate validates the instConfig. This is separate from newInstConfig so
+// testing can be done on newInstConfig without needing real file mounts or
+// other real system setup.
 func (c instConfig) validate() error {
 	var zero process.TargetArgs
 	if c.target == zero {
 		return errUndefinedTarget
 	}
-	if c.traceExp == nil {
+	if c.traceHandler == nil {
 		return errors.New("undefined trace exporter")
 	}
 	return c.target.Validate()
-}
-
-func (c instConfig) tracerProvider(bi *buildinfo.BuildInfo) *trace.TracerProvider {
-	return trace.NewTracerProvider(
-		// the actual sampling is done in the eBPF probes.
-		// this is just to make sure that we export all spans we get from the probes
-		trace.WithSampler(trace.AlwaysSample()),
-		trace.WithResource(c.res(bi)),
-		trace.WithBatcher(c.traceExp),
-		trace.WithIDGenerator(opentelemetry.NewEBPFSourceIDGenerator()),
-	)
-}
-
-func (c instConfig) res(bi *buildinfo.BuildInfo) *resource.Resource {
-	runVer := bi.GoVersion
-
-	var compiler string
-
-	for _, setting := range bi.Settings {
-		if setting.Key == "-compiler" {
-			compiler = setting.Value
-			break
-		}
-	}
-
-	runName := compiler
-	if runName == "gc" {
-		runName = "go"
-	}
-	runDesc := fmt.Sprintf(
-		"go version %s %s/%s",
-		runVer, runtime.GOOS, runtime.GOARCH,
-	)
-
-	attrs := []attribute.KeyValue{
-		semconv.ServiceNameKey.String(c.serviceName),
-		semconv.TelemetrySDKLanguageGo,
-		semconv.TelemetryDistroVersionKey.String(Version()),
-		semconv.TelemetryDistroNameKey.String("opentelemetry-go-instrumentation"),
-		semconv.ProcessRuntimeName(runName),
-		semconv.ProcessRuntimeVersion(runVer),
-		semconv.ProcessRuntimeDescription(runDesc),
-	}
-
-	if len(c.additionalResAttrs) > 0 {
-		attrs = append(attrs, c.additionalResAttrs...)
-	}
-
-	return resource.NewWithAttributes(
-		semconv.SchemaURL,
-		attrs...,
-	)
 }
 
 // newLogger is used for testing.
@@ -326,21 +239,6 @@ func (o fnOpt) apply(ctx context.Context, c instConfig) (instConfig, error) { re
 func WithTarget(path string) InstrumentationOption {
 	return fnOpt(func(_ context.Context, c instConfig) (instConfig, error) {
 		c.target = process.TargetArgs{ExePath: path}
-		return c, nil
-	})
-}
-
-// WithServiceName returns an [InstrumentationOption] defining the name of the service running.
-//
-// If multiple of these options are provided to an [Instrumentation], the last
-// one will be used.
-//
-// If OTEL_SERVICE_NAME is defined or the service name is defined in
-// OTEL_RESOURCE_ATTRIBUTES, this option will conflict with [WithEnv]. If both
-// are used, the last one provided to an [Instrumentation] will be used.
-func WithServiceName(serviceName string) InstrumentationOption {
-	return fnOpt(func(_ context.Context, c instConfig) (instConfig, error) {
-		c.serviceName = serviceName
 		return c, nil
 	})
 }
@@ -400,21 +298,6 @@ func WithEnv() InstrumentationOption {
 		if v, ok := lookupEnv(envTargetExeKey); ok {
 			c.target = process.TargetArgs{ExePath: v}
 		}
-		if _, ok := lookupEnv(envTracesExportersKey); ok {
-			// Don't track the lookup value because autoexport does not provide
-			// a way to just pass the environment value currently. Just use
-			// NewSpanExporter which will re-read this value.
-
-			var e error
-			// NewSpanExporter will use an OTLP (HTTP/protobuf) exporter as the
-			// default. This is the OTel recommended default.
-			c.traceExp, e = autoexport.NewSpanExporter(ctx)
-			err = errors.Join(err, e)
-		}
-		if name, attrs, ok := lookupResourceData(); ok {
-			c.serviceName = name
-			c.additionalResAttrs = append(c.additionalResAttrs, attrs...)
-		}
 		if val, ok := lookupEnv(envOtelGlobalImplKey); ok {
 			boolVal, err := strconv.ParseBool(val)
 			if err == nil {
@@ -436,53 +319,6 @@ func WithEnv() InstrumentationOption {
 			c.sampler = s
 		}
 		return c, err
-	})
-}
-
-func lookupResourceData() (string, []attribute.KeyValue, bool) {
-	// Prioritize OTEL_SERVICE_NAME over OTEL_RESOURCE_ATTRIBUTES value.
-	svcName := ""
-	if v, ok := lookupEnv(envServiceNameKey); ok {
-		svcName = v
-	}
-
-	v, ok := lookupEnv(envResourceAttrKey)
-	if !ok {
-		return svcName, nil, svcName != ""
-	}
-
-	var attrs []attribute.KeyValue
-	for _, keyval := range strings.Split(strings.TrimSpace(v), ",") {
-		key, val, found := strings.Cut(keyval, "=")
-		if !found {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		if key == string(semconv.ServiceNameKey) {
-			svcName = strings.TrimSpace(val)
-		} else {
-			attrs = append(attrs, attribute.String(key, strings.TrimSpace(val)))
-		}
-	}
-
-	if svcName == "" {
-		return "", nil, false
-	}
-
-	return svcName, attrs, true
-}
-
-// WithTraceExporter returns an [InstrumentationOption] that will configure an
-// [Instrumentation] to use the provided exp to export OpenTelemetry tracing
-// telemetry.
-//
-// If OTEL_TRACES_EXPORTER is defined, this option will conflict with
-// [WithEnv]. If both are used, the last one provided to an [Instrumentation]
-// will be used.
-func WithTraceExporter(exp trace.SpanExporter) InstrumentationOption {
-	return fnOpt(func(_ context.Context, c instConfig) (instConfig, error) {
-		c.traceExp = exp
-		return c, nil
 	})
 }
 
@@ -525,15 +361,6 @@ func WithGlobal() InstrumentationOption {
 	})
 }
 
-// WithResourceAttributes returns an [InstrumentationOption] that will configure
-// an [Instrumentation] to add the provided attributes to the OpenTelemetry resource.
-func WithResourceAttributes(attrs ...attribute.KeyValue) InstrumentationOption {
-	return fnOpt(func(_ context.Context, c instConfig) (instConfig, error) {
-		c.additionalResAttrs = append(c.additionalResAttrs, attrs...)
-		return c, nil
-	})
-}
-
 // WithLoadedIndicator returns an [InstrumentationOption] that will configure an
 // [Instrumentation] to close the provided indicator channel when the target
 // process has been instrumented (i.e. all probes have been loaded).
@@ -568,6 +395,18 @@ func WithLogger(logger *slog.Logger) InstrumentationOption {
 func WithConfigProvider(cp ConfigProvider) InstrumentationOption {
 	return fnOpt(func(_ context.Context, c instConfig) (instConfig, error) {
 		c.cp = cp
+		return c, nil
+	})
+}
+
+// WithHandlerTracer returns an [InstrumentationOption] that will configure an
+// [Instrumentation] to use the [handler.Tracer].
+//
+// If this options is not used, the Handler returned from [otelsdk.New] with
+// environment configuration will be used.
+func WithHandlerTracer(h handler.Tracer) InstrumentationOption {
+	return fnOpt(func(_ context.Context, c instConfig) (instConfig, error) {
+		c.traceHandler = h
 		return c, nil
 	})
 }

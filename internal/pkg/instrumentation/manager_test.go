@@ -14,15 +14,12 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/hashicorp/go-version"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 
 	"go.opentelemetry.io/auto/internal/pkg/instrumentation/probe"
 	"go.opentelemetry.io/auto/internal/pkg/instrumentation/probe/sampling"
-	"go.opentelemetry.io/auto/internal/pkg/opentelemetry"
 	"go.opentelemetry.io/auto/internal/pkg/process"
 	"go.opentelemetry.io/auto/internal/pkg/process/binary"
 )
@@ -212,13 +209,15 @@ func mockExeAndBpffs(t *testing.T) {
 	t.Cleanup(func() { bpffsCleanup = origBpffsCleanup })
 }
 
-type shutdownTracerProvider struct {
-	noop.TracerProvider
-
+type shutdownTraceHandler struct {
 	called bool
 }
 
-func (tp *shutdownTracerProvider) Shutdown(context.Context) error {
+func (tp *shutdownTraceHandler) Trace(context.Context, ptrace.ScopeSpans) error {
+	return nil
+}
+
+func (tp *shutdownTraceHandler) Shutdown(context.Context) error {
 	tp.called = true
 	return nil
 }
@@ -227,16 +226,13 @@ func TestRunStopping(t *testing.T) {
 	probeStop := make(chan struct{})
 	p := newSlowProbe(probeStop)
 
-	tp := new(shutdownTracerProvider)
-	ctrl, err := opentelemetry.NewController(slog.Default(), tp)
-	require.NoError(t, err)
-
+	th := new(shutdownTraceHandler)
 	m := &Manager{
-		otelController: ctrl,
-		logger:         slog.Default(),
-		probes:         map[probe.ID]probe.Probe{{}: p},
-		telemetryCh:    make(chan ptrace.ScopeSpans),
-		cp:             NewNoopConfigProvider(nil),
+		traceHandler: th,
+		logger:       slog.Default(),
+		probes:       map[probe.ID]probe.Probe{{}: p},
+		telemetryCh:  make(chan ptrace.ScopeSpans),
+		cp:           NewNoopConfigProvider(nil),
 	}
 
 	mockExeAndBpffs(t)
@@ -258,6 +254,7 @@ func TestRunStopping(t *testing.T) {
 		close(probeStop)
 	})
 
+	var err error
 	assert.Eventually(t, func() bool {
 		select {
 		case err = <-errCh:
@@ -267,7 +264,7 @@ func TestRunStopping(t *testing.T) {
 		}
 	}, time.Second, 10*time.Millisecond)
 	assert.ErrorIs(t, err, context.Canceled, "Stopping Run error")
-	assert.True(t, tp.called, "Controller not stopped")
+	assert.True(t, th.called, "Controller not stopped")
 }
 
 type slowProbe struct {
@@ -490,16 +487,13 @@ func TestRunStopDeadlock(t *testing.T) {
 	// Regression test for #1228.
 	p := newHangingProbe()
 
-	tp := new(shutdownTracerProvider)
-	ctrl, err := opentelemetry.NewController(slog.Default(), tp)
-	require.NoError(t, err)
-
+	th := new(shutdownTraceHandler)
 	m := &Manager{
-		otelController: ctrl,
-		logger:         slog.Default(),
-		probes:         map[probe.ID]probe.Probe{{}: p},
-		telemetryCh:    make(chan ptrace.ScopeSpans),
-		cp:             NewNoopConfigProvider(nil),
+		traceHandler: th,
+		logger:       slog.Default(),
+		probes:       map[probe.ID]probe.Probe{{}: p},
+		telemetryCh:  make(chan ptrace.ScopeSpans),
+		cp:           NewNoopConfigProvider(nil),
 	}
 
 	mockExeAndBpffs(t)
@@ -520,6 +514,7 @@ func TestRunStopDeadlock(t *testing.T) {
 		}, time.Second, 10*time.Millisecond)
 	})
 
+	var err error
 	assert.Eventually(t, func() bool {
 		select {
 		case err = <-errCh:
@@ -529,5 +524,5 @@ func TestRunStopDeadlock(t *testing.T) {
 		}
 	}, time.Second, 10*time.Millisecond)
 	assert.ErrorIs(t, err, context.Canceled, "Stopping Run error")
-	assert.True(t, tp.called, "Controller not stopped")
+	assert.True(t, th.called, "Controller not stopped")
 }

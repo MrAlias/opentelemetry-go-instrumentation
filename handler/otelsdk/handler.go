@@ -1,57 +1,74 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package opentelemetry
+package otelsdk
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+
+	"go.opentelemetry.io/auto/handler"
 )
 
-// Controller handles OpenTelemetry telemetry generation for events.
-type Controller struct {
+// Handler handles telemetry produced by auto-instrumentation by processing
+// that telemetry with the default OpenTelemetry Go SDK.
+type Handler struct {
 	logger         *slog.Logger
 	tracerProvider trace.TracerProvider
-	tracersMap     map[tracerID]trace.Tracer
+
+	stopped atomic.Bool
 }
 
-type tracerID struct{ name, version, schema string }
+var _ handler.Tracer = (*Handler)(nil)
 
-func (c *Controller) getTracer(name, version, schema string) trace.Tracer {
-	tID := tracerID{name: name, version: version, schema: schema}
-	t, exists := c.tracersMap[tID]
-	if !exists {
-		t = c.tracerProvider.Tracer(name, trace.WithInstrumentationVersion(version), trace.WithSchemaURL(schema))
-		c.tracersMap[tID] = t
+// NewHandler returns a new configured Handler.
+func NewHandler(ctx context.Context, options ...Option) (*Handler, error) {
+	c, err := newConfig(ctx, options)
+	if err != nil {
+		return nil, err
 	}
-	return t
+
+	tp, err := c.TracerProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Handler{
+		logger:         c.Logger(),
+		tracerProvider: tp,
+	}, nil
 }
 
-// Trace creates a trace span for event.
-func (c *Controller) Trace(ss ptrace.ScopeSpans) {
+// Trace traces the spans passed using the default OpenTelemetry Go SDK.
+func (h *Handler) Trace(ctx context.Context, spans ptrace.ScopeSpans) error {
+	if h.stopped.Load() {
+		return nil
+	}
+
 	var (
 		startOpts []trace.SpanStartOption
 		eventOpts []trace.EventOption
 		endOpts   []trace.SpanEndOption
-		kvs       []attribute.KeyValue
+		spanKVs   []attribute.KeyValue
+		tracerKVs []attribute.KeyValue
 	)
 
-	t := c.getTracer(ss.Scope().Name(), ss.Scope().Version(), ss.SchemaUrl())
-	for k := 0; k < ss.Spans().Len(); k++ {
-		pSpan := ss.Spans().At(k)
+	for k := 0; k < spans.Spans().Len(); k++ {
+		pSpan := spans.Spans().At(k)
 
 		if pSpan.TraceID().IsEmpty() || pSpan.SpanID().IsEmpty() {
-			c.logger.Debug("dropping invalid span", "name", pSpan.Name())
+			h.logger.Debug("dropping invalid span", "name", pSpan.Name())
 			continue
 		}
-		c.logger.Debug("handling span", "tracer", t, "span", pSpan)
+		h.logger.Debug("handling span", "span", pSpan)
 
 		ctx := context.Background()
 		if !pSpan.ParentSpanID().IsEmpty() {
@@ -61,19 +78,29 @@ func (c *Controller) Trace(ss ptrace.ScopeSpans) {
 			})
 			ctx = trace.ContextWithSpanContext(ctx, psc)
 		}
-		ctx = ContextWithSpan(ctx, pSpan)
+		ctx = contextWithSpan(ctx, pSpan)
 
-		kvs = appendAttrs(kvs, pSpan.Attributes())
+		spanKVs = appendAttrs(spanKVs, pSpan.Attributes())
 		startOpts = append(
 			startOpts,
-			trace.WithAttributes(kvs...),
+			trace.WithAttributes(spanKVs...),
 			trace.WithSpanKind(spanKind(pSpan.Kind())),
 			trace.WithTimestamp(pSpan.StartTimestamp().AsTime()),
-			trace.WithLinks(c.links(pSpan.Links())...),
+			trace.WithLinks(h.links(pSpan.Links())...),
 		)
-		_, span := t.Start(ctx, pSpan.Name(), startOpts...)
+
+		tracerKVs = appendAttrs(tracerKVs, spans.Scope().Attributes())
+		tracer := h.tracerProvider.Tracer(
+			spans.Scope().Name(),
+			trace.WithInstrumentationVersion(spans.Scope().Version()),
+			trace.WithInstrumentationAttributes(tracerKVs...),
+			trace.WithSchemaURL(spans.SchemaUrl()),
+		)
+		tracerKVs = tracerKVs[:0]
+
+		_, span := tracer.Start(ctx, pSpan.Name(), startOpts...)
 		startOpts = startOpts[:0]
-		kvs = kvs[:0]
+		spanKVs = spanKVs[:0]
 
 		for l := 0; l < pSpan.Events().Len(); l++ {
 			e := pSpan.Events().At(l)
@@ -89,28 +116,29 @@ func (c *Controller) Trace(ss ptrace.ScopeSpans) {
 		span.End(endOpts...)
 		endOpts = endOpts[:0]
 	}
+	return nil
 }
 
-// NewController returns a new initialized [Controller].
-func NewController(logger *slog.Logger, tracerProvider trace.TracerProvider) (*Controller, error) {
-	return &Controller{
-		logger:         logger,
-		tracerProvider: tracerProvider,
-		tracersMap:     make(map[tracerID]trace.Tracer),
-	}, nil
-}
-
-// Shutdown shuts down the OpenTelemetry TracerProvider.
+// Shutdown shuts down the Handler.
 //
-// Once shut down, calls to Trace will result in no-op spans (i.e. dropped).
-func (c *Controller) Shutdown(ctx context.Context) error {
-	if s, ok := c.tracerProvider.(interface {
+// Once shut down, calls to Trace will be dropped.
+func (h *Handler) Shutdown(ctx context.Context) error {
+	if h.stopped.Swap(true) {
+		return nil
+	}
+
+	if s, ok := h.tracerProvider.(interface {
 		Shutdown(context.Context) error
 	}); ok {
-		// Default TracerProvider implementation.
 		return s.Shutdown(ctx)
 	}
 	return nil
+}
+
+func attrs(m pcommon.Map) []attribute.KeyValue {
+	out := make([]attribute.KeyValue, 0, m.Len())
+	appendAttrs(out, m)
+	return out
 }
 
 func appendAttrs(dest []attribute.KeyValue, m pcommon.Map) []attribute.KeyValue {
@@ -213,15 +241,14 @@ func appendEventOpts(dest []trace.EventOption, e ptrace.SpanEvent) []trace.Event
 		dest = append(dest, trace.WithTimestamp(ts))
 	}
 
-	var kvs []attribute.KeyValue
-	kvs = appendAttrs(kvs, e.Attributes())
+	kvs := attrs(e.Attributes())
 	if len(kvs) > 0 {
 		dest = append(dest, trace.WithAttributes(kvs...))
 	}
 	return dest
 }
 
-func (c *Controller) links(links ptrace.SpanLinkSlice) []trace.Link {
+func (h *Handler) links(links ptrace.SpanLinkSlice) []trace.Link {
 	n := links.Len()
 	if n == 0 {
 		return nil
@@ -234,7 +261,7 @@ func (c *Controller) links(links ptrace.SpanLinkSlice) []trace.Link {
 		raw := l.TraceState().AsRaw()
 		ts, err := trace.ParseTraceState(raw)
 		if err != nil {
-			c.logger.Error("failed to parse link tracestate", "error", err, "tracestate", raw)
+			h.logger.Error("failed to parse link tracestate", "error", err, "tracestate", raw)
 		}
 
 		out[i] = trace.Link{
@@ -244,8 +271,8 @@ func (c *Controller) links(links ptrace.SpanLinkSlice) []trace.Link {
 				TraceFlags: trace.TraceFlags(l.Flags()),
 				TraceState: ts,
 			}),
+			Attributes: attrs(l.Attributes()),
 		}
-		out[i].Attributes = appendAttrs(out[i].Attributes, l.Attributes())
 	}
 	return out
 }

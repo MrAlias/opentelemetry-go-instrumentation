@@ -27,7 +27,6 @@ import (
 	httpServer "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/net/http/server"
 	"go.opentelemetry.io/auto/internal/pkg/instrumentation/bpffs"
 	"go.opentelemetry.io/auto/internal/pkg/instrumentation/probe"
-	"go.opentelemetry.io/auto/internal/pkg/opentelemetry"
 	"go.opentelemetry.io/auto/internal/pkg/process"
 )
 
@@ -51,7 +50,7 @@ type Manager struct {
 	logger          *slog.Logger
 	version         string
 	probes          map[probe.ID]probe.Probe
-	otelController  *opentelemetry.Controller
+	traceHandler    traceHandler
 	globalImpl      bool
 	loadedIndicator chan struct{}
 	cp              ConfigProvider
@@ -65,12 +64,12 @@ type Manager struct {
 }
 
 // NewManager returns a new [Manager].
-func NewManager(logger *slog.Logger, otelController *opentelemetry.Controller, globalImpl bool, loadIndicator chan struct{}, cp ConfigProvider, version string) (*Manager, error) {
+func NewManager(logger *slog.Logger, th traceHandler, globalImpl bool, loadIndicator chan struct{}, cp ConfigProvider, version string) (*Manager, error) {
 	m := &Manager{
 		logger:          logger,
 		version:         version,
 		probes:          make(map[probe.ID]probe.Probe),
-		otelController:  otelController,
+		traceHandler:    th,
 		globalImpl:      globalImpl,
 		loadedIndicator: loadIndicator,
 		cp:              cp,
@@ -301,7 +300,10 @@ func (m *Manager) Run(ctx context.Context, target *process.TargetDetails) error 
 	}()
 
 	for e := range m.telemetryCh {
-		m.otelController.Trace(e)
+		err := m.traceHandler.Trace(ctx, e)
+		if err != nil {
+			m.logger.Error("failed to handle event", "error", err)
+		}
 	}
 	return <-done
 }
@@ -360,8 +362,8 @@ func (m *Manager) cleanup(target *process.TargetDetails) error {
 
 	// Wait for all probes to close so we know there is no more telemetry being
 	// generated before stopping (and flushing) the Controller.
-	if m.otelController != nil {
-		err = errors.Join(err, m.otelController.Shutdown(ctx))
+	if m.traceHandler != nil {
+		err = errors.Join(err, m.traceHandler.Shutdown(ctx))
 	}
 
 	m.logger.Debug("Cleaning bpffs")
