@@ -79,3 +79,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250218202821-56aae31c358a // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 )
+
+replace go.opentelemetry.io/auto/sdk => ./sdk
