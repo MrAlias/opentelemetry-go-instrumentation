@@ -560,6 +560,8 @@ go.opentelemetry.io/auto/sdk v1.1.0 h1:cH53jehLUN6UFLY71z+NDOiNJqDdPRaXzTel0sJyS
 go.opentelemetry.io/auto/sdk v1.1.0/go.mod h1:3wSPjt5PWp2RhlCcmmOial7AvC4DQqZb7a7wCow3W8A=
 go.opentelemetry.io/build-tools v0.18.0 h1:c07DNSmJxLbgHm1wlvKCjvQTOhd1xtaWqe6+VpzrTXo=
 go.opentelemetry.io/build-tools v0.18.0/go.mod h1:ZhuNyO/aAkGEFTfNhH7Nhv7fIWpxIOp8t7XshpPWiOU=
+go.opentelemetry.io/build-tools/crosslink v0.18.0 h1:mWB10RvMbb8qg0/5AlySV8NJhCt9BTZRxZa82HDiWvs=
+go.opentelemetry.io/build-tools/crosslink v0.18.0/go.mod h1:criIVfHTSMoyVwECMVE55VXhUVWtjpXQtwYkNK87U5g=
 go.opentelemetry.io/build-tools/dbotconf v0.18.0 h1:WsJKTxwgKLGszVGpnV12wxZBPzBYsn30kJNfAPZs+X8=
 go.opentelemetry.io/build-tools/dbotconf v0.18.0/go.mod h1:So4y/TN/z9d/BeG75r8MAe8jrN68OgTkzqR4OT2etK8=
 go.opentelemetry.io/build-tools/multimod v0.18.0 h1:zHaEejwAtzUCPyQfPuaZFaIGPiD1JbZDegyEcCVNTKo=
