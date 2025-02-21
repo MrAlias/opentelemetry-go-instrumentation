@@ -15,6 +15,7 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
+	"go.opentelemetry.io/auto/export"
 	dbSql "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/database/sql"
 	kafkaConsumer "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/github.com/segmentio/kafka-go/consumer"
 	kafkaProducer "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/github.com/segmentio/kafka-go/producer"
@@ -26,7 +27,6 @@ import (
 	httpServer "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/net/http/server"
 	"go.opentelemetry.io/auto/internal/pkg/instrumentation/bpffs"
 	"go.opentelemetry.io/auto/internal/pkg/instrumentation/probe"
-	"go.opentelemetry.io/auto/internal/pkg/opentelemetry"
 	"go.opentelemetry.io/auto/internal/pkg/process"
 )
 
@@ -52,7 +52,7 @@ type Manager struct {
 	logger          *slog.Logger
 	version         string
 	probes          map[probe.ID]probe.Probe
-	otelController  *opentelemetry.Controller
+	handler         export.Handler
 	globalImpl      bool
 	cp              ConfigProvider
 	exe             *link.Executable
@@ -66,14 +66,14 @@ type Manager struct {
 }
 
 // NewManager returns a new [Manager].
-func NewManager(logger *slog.Logger, otelController *opentelemetry.Controller, globalImpl bool, cp ConfigProvider, version string) (*Manager, error) {
+func NewManager(logger *slog.Logger, h export.Handler, globalImpl bool, cp ConfigProvider, version string) (*Manager, error) {
 	m := &Manager{
-		logger:         logger,
-		version:        version,
-		probes:         make(map[probe.ID]probe.Probe),
-		otelController: otelController,
-		globalImpl:     globalImpl,
-		cp:             cp,
+		logger:     logger,
+		version:    version,
+		probes:     make(map[probe.ID]probe.Probe),
+		handler:    h,
+		globalImpl: globalImpl,
+		cp:         cp,
 	}
 
 	err := m.registerProbes()
@@ -226,7 +226,7 @@ func (m *Manager) runProbe(p probe.Probe) {
 	m.runningProbesWG.Add(1)
 	go func(ap probe.Probe) {
 		defer m.runningProbesWG.Done()
-		ap.Run(m.otelController.Trace)
+		ap.Run(m.handler)
 	}(p)
 }
 
@@ -394,16 +394,9 @@ func (m *Manager) mount(target *process.Info) error {
 }
 
 func (m *Manager) cleanup(target *process.Info) error {
-	ctx := context.Background()
 	err := m.cp.Shutdown(context.Background())
 	for _, i := range m.probes {
 		err = errors.Join(err, i.Close())
-	}
-
-	// Wait for all probes to close so we know there is no more telemetry being
-	// generated before stopping (and flushing) the Controller.
-	if m.otelController != nil {
-		err = errors.Join(err, m.otelController.Shutdown(ctx))
 	}
 
 	m.logger.Debug("Cleaning bpffs")
