@@ -4,6 +4,7 @@ FROM golang:1.24.0@sha256:2b1cbf278ce05a2a310a3d695ebb176420117a8cfcfcc4e5e68a1b
 # them in subsequent builds if they change
 WORKDIR /usr/src/go.opentelemetry.io/auto/internal/test/e2e/grpc
 
+# Copy auto/sdk so `go mod` finds the replaced module.
 COPY sdk/ /usr/src/go.opentelemetry.io/auto/sdk/
 
 COPY internal/test/e2e/grpc/go.mod internal/test/e2e/grpc/go.sum ./
