@@ -109,7 +109,7 @@ func (o errOpt) apply(map[string]interface{}) error {
 
 // WithAllocation returns an option that will set "total_cpus", "start_addr",
 // and "end_addr".
-func WithAllocation(alloc process.Allocation) Option {
+func WithAllocation(alloc *process.Allocation) Option {
 	return option{
 		keyTotalCPUs: alloc.NumCPU,
 		keyStartAddr: alloc.StartAddr,
@@ -149,16 +149,16 @@ func WithOffset(key string, id structfield.ID, ver *semver.Version) Option {
 }
 
 func FindOffset(id structfield.ID, info *process.Info) (structfield.OffsetKey, error) {
-	fd, err := info.OpenExe()
+	path, err := process.ID(info.PID).ExecPath()
 	if err != nil {
 		return structfield.OffsetKey{}, err
 	}
-	defer fd.Close()
 
-	elfF, err := elf.NewFile(fd)
+	elfF, err := elf.Open(path)
 	if err != nil {
 		return structfield.OffsetKey{}, err
 	}
+	defer elfF.Close()
 
 	data, err := elfF.DWARF()
 	if err != nil {

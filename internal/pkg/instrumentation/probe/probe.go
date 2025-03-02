@@ -384,7 +384,7 @@ type Uprobe struct {
 }
 
 func (u *Uprobe) load(exec *link.Executable, info *process.Info, c *ebpf.Collection) error {
-	offset, err := info.GetFunctionOffset(u.Sym)
+	offset, err := info.Functions.Offset(u.Sym)
 	if err != nil {
 		return err
 	}
@@ -409,7 +409,7 @@ func (u *Uprobe) load(exec *link.Executable, info *process.Info, c *ebpf.Collect
 		if !ok {
 			return fmt.Errorf("return probe %s not found", u.ReturnProbe)
 		}
-		retOffsets, err := info.GetFunctionReturns(u.Sym)
+		retOffsets, err := info.Functions.ReturnOffsets(u.Sym)
 		if err != nil {
 			return err
 		}
@@ -574,14 +574,14 @@ func (c StructFieldConstMinVersion) InjectOption(info *process.Info) (inject.Opt
 // injected into an eBPF program.
 type AllocationConst struct{}
 
-// InjectOption returns the appropriately configured
-// [inject.WithAllocation] if the [process.Allocation] within td
-// are not nil. An error is returned if [process.Allocation] is nil.
+// InjectOption returns the appropriately configured [inject.WithAllocation].
+// An error is returned if process memory allocation fails.
 func (c AllocationConst) InjectOption(info *process.Info) (inject.Option, error) {
-	if info.Allocation == nil {
-		return nil, errors.New("no allocation details")
+	alloc, err := info.Alloc()
+	if err != nil {
+		return nil, err
 	}
-	return inject.WithAllocation(*info.Allocation), nil
+	return inject.WithAllocation(alloc), nil
 }
 
 // KeyValConst is a [Const] for a generic key-value pair.

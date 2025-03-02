@@ -22,6 +22,15 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
+	dbSql "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/database/sql"
+	kafkaConsumer "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/github.com/segmentio/kafka-go/consumer"
+	kafkaProducer "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/github.com/segmentio/kafka-go/producer"
+	autosdk "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/go.opentelemetry.io/auto/sdk"
+	otelTraceGlobal "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/go.opentelemetry.io/otel/traceglobal"
+	grpcClient "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/google.golang.org/grpc/client"
+	grpcServer "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/google.golang.org/grpc/server"
+	httpClient "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/net/http/client"
+	httpServer "go.opentelemetry.io/auto/internal/pkg/instrumentation/bpf/net/http/server"
 	"go.opentelemetry.io/auto/internal/pkg/instrumentation/probe"
 	"go.opentelemetry.io/auto/internal/pkg/instrumentation/probe/sampling"
 	"go.opentelemetry.io/auto/internal/pkg/opentelemetry"
@@ -34,68 +43,61 @@ func TestProbeFiltering(t *testing.T) {
 
 	t.Run("empty target details", func(t *testing.T) {
 		m := fakeManager(t)
-
-		info := process.Info{
+		m.proc = &process.Info{
 			PID:       1,
-			Functions: []*binary.Func{},
+			Functions: process.NewFunctions(),
 			GoVersion: ver,
-			Modules:   map[string]*semver.Version{},
 		}
-		m.FilterUnusedProbes(&info)
+		m.filterUnusedProbes()
 		assert.Empty(t, m.probes)
 	})
 
 	t.Run("only HTTP client target details", func(t *testing.T) {
 		m := fakeManager(t)
 
-		httpFuncs := []*binary.Func{
-			{Name: "net/http.(*Transport).roundTrip"},
-		}
+		httpFuncs := process.NewFunctions()
+		httpFuncs.Put(&binary.Func{Name: "net/http.(*Transport).roundTrip"})
 
-		info := process.Info{
+		m.proc = &process.Info{
 			PID:       1,
 			Functions: httpFuncs,
 			GoVersion: ver,
 			Modules:   map[string]*semver.Version{},
 		}
-		m.FilterUnusedProbes(&info)
+		m.filterUnusedProbes()
 		assert.Len(t, m.probes, 1) // one function, single probe
 	})
 
 	t.Run("HTTP server and client target details", func(t *testing.T) {
 		m := fakeManager(t)
 
-		httpFuncs := []*binary.Func{
-			{Name: "net/http.(*Transport).roundTrip"},
-			{Name: "net/http.serverHandler.ServeHTTP"},
-		}
+		httpFuncs := process.NewFunctions()
+		httpFuncs.Put(&binary.Func{Name: "net/http.(*Transport).roundTrip"})
+		httpFuncs.Put(&binary.Func{Name: "net/http.serverHandler.ServeHTTP"})
 
-		info := process.Info{
+		m.proc = &process.Info{
 			PID:       1,
 			Functions: httpFuncs,
 			GoVersion: ver,
 			Modules:   map[string]*semver.Version{},
 		}
-		m.FilterUnusedProbes(&info)
+		m.filterUnusedProbes()
 		assert.Len(t, m.probes, 2)
 	})
 
 	t.Run("HTTP server and client dependent function only target details", func(t *testing.T) {
 		m := fakeManager(t)
 
-		httpFuncs := []*binary.Func{
-			// writeSubset depends on "net/http.(*Transport).roundTrip", it should be ignored without roundTrip
-			{Name: "net/http.Header.writeSubset"},
-			{Name: "net/http.serverHandler.ServeHTTP"},
-		}
+		httpFuncs := process.NewFunctions()
+		httpFuncs.Put(&binary.Func{Name: "net/http.Header.writeSubset"})
+		httpFuncs.Put(&binary.Func{Name: "net/http.serverHandler.ServeHTTP"})
 
-		info := process.Info{
+		m.proc = &process.Info{
 			PID:       1,
 			Functions: httpFuncs,
 			GoVersion: ver,
-			Modules:   map[string]*semver.Version{},
 		}
-		m.FilterUnusedProbes(&info)
+		m.filterUnusedProbes()
 		assert.Len(t, m.probes, 1)
 	})
 }
@@ -183,17 +185,33 @@ func TestDependencyChecks(t *testing.T) {
 	})
 }
 
-func fakeManager(t *testing.T) *Manager {
-	m, err := NewManager(slog.Default(), nil, true, NewNoopConfigProvider(nil), "")
-	assert.NoError(t, err)
-	assert.NotNil(t, m)
-
+func fakeManager(*testing.T) *Manager {
+	logger := slog.Default()
+	probes := []probe.Probe{
+		grpcClient.New(logger, ""),
+		grpcServer.New(logger, ""),
+		httpServer.New(logger, ""),
+		httpClient.New(logger, ""),
+		dbSql.New(logger, ""),
+		kafkaProducer.New(logger, ""),
+		kafkaConsumer.New(logger, ""),
+		autosdk.New(logger),
+		otelTraceGlobal.New(logger),
+	}
+	m := &Manager{
+		logger: slog.Default(),
+		cp:     NewNoopConfigProvider(nil),
+		probes: make(map[probe.ID]probe.Probe),
+	}
+	for _, p := range probes {
+		m.probes[p.Manifest().ID] = p
+	}
 	return m
 }
 
 func mockExeAndBpffs(t *testing.T) {
 	origOpenExecutable := openExecutable
-	openExecutable = func(string) (*link.Executable, error) { return &link.Executable{}, nil }
+	openExecutable = func(int) (*link.Executable, error) { return &link.Executable{}, nil }
 	t.Cleanup(func() { openExecutable = origOpenExecutable })
 
 	origRlimitRemoveMemlock := rlimitRemoveMemlock
@@ -243,6 +261,7 @@ func TestRunStoppingByContext(t *testing.T) {
 		logger:         slog.Default(),
 		probes:         map[probe.ID]probe.Probe{{}: p},
 		cp:             NewNoopConfigProvider(nil),
+		proc:           new(process.Info),
 	}
 
 	mockExeAndBpffs(t)
@@ -250,8 +269,7 @@ func TestRunStoppingByContext(t *testing.T) {
 	ctx, stopCtx := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 
-	err = m.Load(ctx, &process.Info{PID: 1000})
-	require.NoError(t, err)
+	require.NoError(t, m.Load(ctx))
 
 	go func() { errCh <- m.Run(ctx) }()
 
@@ -292,6 +310,7 @@ func TestRunStoppingByStop(t *testing.T) {
 		logger:         slog.Default(),
 		probes:         map[probe.ID]probe.Probe{{}: &p},
 		cp:             NewNoopConfigProvider(nil),
+		proc:           new(process.Info),
 	}
 
 	mockExeAndBpffs(t)
@@ -299,8 +318,7 @@ func TestRunStoppingByStop(t *testing.T) {
 	ctx := context.Background()
 	errCh := make(chan error, 1)
 
-	err = m.Load(ctx, &process.Info{PID: 1000})
-	require.NoError(t, err)
+	require.NoError(t, m.Load(ctx))
 
 	time.AfterFunc(100*time.Millisecond, func() {
 		err := m.Stop()
@@ -424,13 +442,13 @@ func TestConfigProvider(t *testing.T) {
 				netHTTPClientLibID: {TracesEnabled: &falseVal},
 			},
 		}),
+		proc: new(process.Info),
 	}
 
 	mockExeAndBpffs(t)
 	runCtx, cancel := context.WithCancel(context.Background())
 
-	err := m.Load(runCtx, &process.Info{PID: 1000})
-	require.NoError(t, err)
+	require.NoError(t, m.Load(runCtx))
 
 	runErr := make(chan error, 1)
 
@@ -556,6 +574,7 @@ func TestRunStopDeadlock(t *testing.T) {
 		logger:         slog.Default(),
 		probes:         map[probe.ID]probe.Probe{{}: p},
 		cp:             NewNoopConfigProvider(nil),
+		proc:           new(process.Info),
 	}
 
 	mockExeAndBpffs(t)
@@ -563,8 +582,7 @@ func TestRunStopDeadlock(t *testing.T) {
 	ctx, stopCtx := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 
-	err = m.Load(ctx, &process.Info{PID: 1000})
-	require.NoError(t, err)
+	require.NoError(t, m.Load(ctx))
 
 	go func() { errCh <- m.Run(ctx) }()
 
@@ -624,12 +642,12 @@ func TestStopBeforeRun(t *testing.T) {
 		logger:         slog.Default(),
 		probes:         map[probe.ID]probe.Probe{{}: &p},
 		cp:             NewNoopConfigProvider(nil),
+		proc:           new(process.Info),
 	}
 
 	mockExeAndBpffs(t)
 
-	err = m.Load(context.Background(), &process.Info{PID: 1000})
-	require.NoError(t, err)
+	require.NoError(t, m.Load(context.Background()))
 	require.True(t, p.loaded.Load())
 
 	err = m.Stop()

@@ -16,7 +16,7 @@ import (
 
 func TestWithAllocationDetails(t *testing.T) {
 	const start, end, nCPU uint64 = 1, 2, 3
-	alloc := process.Allocation{
+	alloc := &process.Allocation{
 		StartAddr: start,
 		EndAddr:   end,
 		NumCPU:    nCPU,

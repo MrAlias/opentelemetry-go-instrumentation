@@ -5,7 +5,6 @@ package process
 
 import (
 	"context"
-	"debug/buildinfo"
 	"errors"
 	"io"
 	"log/slog"
@@ -28,13 +27,13 @@ var (
 
 // Analyzer is used to find actively running processes.
 type Analyzer struct {
-	logger    *slog.Logger
-	BuildInfo *buildinfo.BuildInfo
+	id     ID
+	logger *slog.Logger
 }
 
 // NewAnalyzer returns a new [ProcessAnalyzer].
-func NewAnalyzer(logger *slog.Logger) *Analyzer {
-	return &Analyzer{logger: logger}
+func NewAnalyzer(logger *slog.Logger, id ID) *Analyzer {
+	return &Analyzer{logger: logger, id: id}
 }
 
 // DiscoverProcessID searches for the target as an actively running process,

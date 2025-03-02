@@ -10,15 +10,15 @@ import (
 	"math"
 )
 
-func FindFunctionsUnStripped(elfF *elf.File, relevantFuncs map[string]interface{}) ([]*Func, error) {
+func FindFunctionsUnStripped(elfF *elf.File, fltr func(string) bool) (map[string]*Func, error) {
 	symbols, err := elfF.Symbols()
 	if err != nil {
 		return nil, err
 	}
 
-	var result []*Func
+	result := make(map[string]*Func)
 	for _, f := range symbols {
-		if _, exists := relevantFuncs[f.Name]; exists {
+		if fltr(f.Name) {
 			offset, err := getFuncOffsetUnstripped(elfF, f)
 			if err != nil {
 				return nil, err
@@ -35,7 +35,7 @@ func FindFunctionsUnStripped(elfF *elf.File, relevantFuncs map[string]interface{
 				ReturnOffsets: returns,
 			}
 
-			result = append(result, function)
+			result[f.Name] = function
 		}
 	}
 
