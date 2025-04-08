@@ -22,6 +22,16 @@ OpenTelemetry Go Automatic Instrumentation adheres to [Semantic Versioning](http
 - Cache offsets for `go.opentelemetry.io/otel@v1.35.0`. ([#1948](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/1948))
 - Cache offsets for `golang.org/x/net` `0.37.0`. ([#1948](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/1948))
 - Instrument spans created with the OpenTelemetry trace API from an empty context. ([#2001](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/2001))
+- Cache offsets for `golang.org/x/net` `0.38.0`. ([#2063](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/2063))
+- Cache offsets for `google.golang.org/grpc` `1.71.1`. ([#2078](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/2078))
+- Cache offsets for Go `1.23.8`. ([#2081](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/2081))
+- Cache offsets for Go `1.24.2`. ([#2081](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/2081))
+- Cache offsets for `google.golang.org/grpc` `1.73.0-dev`. ([#2091](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/2091))
+- Cache offsets for `golang.org/x/net` `0.39.0`. ([#2107](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/2107))
+
+### Changed
+
+- Upgrade OpenTelemetry semantic conventions to `v1.30.0`. ([#2032](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/2032))
 
 ### Removed
 
@@ -39,6 +49,8 @@ OpenTelemetry Go Automatic Instrumentation adheres to [Semantic Versioning](http
 - Fix spans parsing from eBPF for the legacy (go version < 1.24 otel-go < 1.33) otel global instrumentation. ([#1960](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/1960))
 - The `process.runtime.version` resource attribute is now the exact value returned from `debug` to match what OpenTelemetry semantic conventions recommend. ([#1985](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/1985))
 - Stop adding `process.runtime.description` to `Resource` to follow OpenTelemetry semantic conventions. ([#1986](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/1986))
+- Reset Kafka producer span underlying memory before each span. ([#1937](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/1937))
+- Stop pinning collector image in e2e tests. ([#2072](https://github.com/open-telemetry/opentelemetry-go-instrumentation/pull/2072))
 
 ## [v0.21.0] - 2025-02-18
 
